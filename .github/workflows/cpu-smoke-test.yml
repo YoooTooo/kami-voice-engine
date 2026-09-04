@@ -1,0 +1,196 @@
+name: RVC CPU smoke test
+
+# Development compatibility test only; no production schedule.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kami-cpu-smoke-test
+  cancel-in-progress: false
+
+jobs:
+  convert:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      VECLIB_MAXIMUM_THREADS: '1'
+      NUMBA_NUM_THREADS: '1'
+      CUDA_VISIBLE_DEVICES: ''
+      PYTHONUNBUFFERED: '1'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: 'true'
+      AWS_PAGER: ''
+      R2_BUCKET: kami-voice-private
+
+    steps:
+      - name: Start measurement
+        run: |
+          echo "KAMI_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          echo "KAMI_TEST_DIR=$RUNNER_TEMP/kami-cpu-test" >> "$GITHUB_ENV"
+
+      - name: Checkout Kami
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Checkout the tested Applio revision
+        uses: actions/checkout@v7
+        with:
+          repository: IAHispano/Applio
+          ref: 085197e738ce9dd4c0bae1e0a74df5de25b89444
+          path: applio
+          persist-credentials: false
+
+      - name: Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12.14'
+
+      - name: Verify source and prepare directories
+        run: |
+          test "$(git -C applio rev-parse HEAD)" = 085197e738ce9dd4c0bae1e0a74df5de25b89444
+          test -f kami_voice.py
+          mkdir -p "$KAMI_TEST_DIR/models" "$KAMI_TEST_DIR/input" "$KAMI_TEST_DIR/result"
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          # Stop on source mismatch instead of silently testing another CLI.
+          expected = {
+              'core.py': 'cbdfcefe9987b076467ea063cd89c88bd08f0dcef105ebf4edbcd62c7e441940',
+              'requirements.txt': '8480329e18b22f2c1ca58a480f9154472eafd05f9b5c05fae0cbb8c60864e84c',
+          }
+          for name, digest in expected.items():
+              data = (Path('applio') / name).read_bytes().replace(b'\r\n', b'\n')
+              if hashlib.sha256(data).hexdigest() != digest:
+                  raise SystemExit(f'{name} differs from the supplied Mac file. Review before continuing.')
+          PY
+
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libportaudio2 libsndfile1 time
+          aws --version
+
+      - name: Install CPU dependencies (cold start)
+        timeout-minutes: 20
+        run: |
+          python -m venv applio/.venv
+          applio/.venv/bin/python -m pip install --upgrade pip
+          /usr/bin/time -v applio/.venv/bin/python -m pip install --no-cache-dir \
+            torch==2.11.0 torchaudio==2.11.0 torchvision==0.26.0 \
+            --index-url https://download.pytorch.org/whl/cpu
+          applio/.venv/bin/python - <<'PY'
+          import os
+          from pathlib import Path
+          import torch, torchaudio, torchvision
+          packages = [('torch', torch), ('torchaudio', torchaudio), ('torchvision', torchvision)]
+          constraints = ''.join(f'{name}=={module.__version__}\n' for name, module in packages)
+          (Path(os.environ['KAMI_TEST_DIR']) / 'cpu-constraints.txt').write_text(constraints)
+          assert torch.version.cuda is None, 'Expected a CPU-only PyTorch wheel'
+          PY
+          /usr/bin/time -v applio/.venv/bin/python -m pip install --no-cache-dir \
+            -c "$KAMI_TEST_DIR/cpu-constraints.txt" -r applio/requirements.txt python-ffmpeg
+          applio/.venv/bin/python -m pip check
+          applio/.venv/bin/python -m pip freeze > "$KAMI_TEST_DIR/result/packages.txt"
+
+      - name: Download test input and private models
+        timeout-minutes: 5
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          test -n "$AWS_ACCESS_KEY_ID" || { echo 'Missing R2_ACCESS_KEY_ID'; exit 1; }
+          test -n "$AWS_SECRET_ACCESS_KEY" || { echo 'Missing R2_SECRET_ACCESS_KEY'; exit 1; }
+          test -n "$R2_ENDPOINT" || { echo 'Missing R2_ENDPOINT'; exit 1; }
+          /usr/bin/time -v aws s3 cp "s3://$R2_BUCKET/amaterasu/amaterasu.pth" \
+            "$KAMI_TEST_DIR/models/amaterasu.pth" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          /usr/bin/time -v aws s3 cp "s3://$R2_BUCKET/amaterasu/amaterasu.index" \
+            "$KAMI_TEST_DIR/models/amaterasu.index" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          aws s3 cp "s3://$R2_BUCKET/tests/input/question.wav" \
+            "$KAMI_TEST_DIR/input/question.wav" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+
+      - name: Validate short input
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from kami_voice import validate_wav
+          data = validate_wav(Path(os.environ['KAMI_TEST_DIR']) / 'input/question.wav')
+          if data['duration_seconds'] > 15:
+              raise SystemExit('Smoke test input must be 15 seconds or shorter.')
+          print('Input:', data)
+          PY
+
+      - name: Download auxiliary inference models
+        timeout-minutes: 10
+        working-directory: applio
+        run: |
+          /usr/bin/time -v .venv/bin/python core.py prerequisites \
+            --no-pretraineds-hifigan --models --no-exe
+
+      - name: Verify CPU device
+        working-directory: applio
+        run: |
+          .venv/bin/python - <<'PY'
+          import torch
+          from rvc.configs.config import Config
+          device = str(Config().device)
+          print('PyTorch:', torch.__version__, 'Applio device:', device)
+          assert torch.version.cuda is None
+          assert device == 'cpu', f'Expected CPU, got {device}'
+          PY
+
+      - name: Convert one clip
+        timeout-minutes: 10
+        run: |
+          /usr/bin/time -v -o "$KAMI_TEST_DIR/result/inference-time.txt" \
+            python kami_voice.py convert "$KAMI_TEST_DIR/input/question.wav" \
+            --output "$KAMI_TEST_DIR/result/answer-rvc.wav" \
+            --applio-dir "$GITHUB_WORKSPACE/applio" \
+            --python "$GITHUB_WORKSPACE/applio/.venv/bin/python" \
+            --model "$KAMI_TEST_DIR/models/amaterasu.pth" \
+            --index "$KAMI_TEST_DIR/models/amaterasu.index" \
+            --pitch 2 --timeout-seconds 540
+
+      - name: Save result to private R2 only
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          result_prefix="tests/results/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          # Explicit allowlist: never upload the workspace or the model directory.
+          for name in answer-rvc.wav inference-time.txt packages.txt; do
+            aws s3 cp "$KAMI_TEST_DIR/result/$name" "s3://$R2_BUCKET/$result_prefix/$name" \
+              --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          done
+          echo "Private result: s3://$R2_BUCKET/$result_prefix/answer-rvc.wav" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Measurement summary (also on failure)
+        if: ${{ always() }}
+        env:
+          KAMI_JOB_STATUS: ${{ job.status }}
+        run: |
+          python - <<'PY'
+          import os, time
+          from pathlib import Path
+          elapsed = int(time.time()) - int(os.environ['KAMI_STARTED'])
+          report = Path(os.environ['KAMI_TEST_DIR']) / 'result/inference-time.txt'
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write(f'\nStatus before summary: {os.environ["KAMI_JOB_STATUS"]}\n\n')
+              out.write(f'Elapsed since first step: {elapsed} seconds (not billed minutes).\n\n')
+              out.write('Cold run: no dependency/model cache. Inspect step durations for setup/download costs.\n\n')
+              if report.exists():
+                  out.write('```text\n' + report.read_text() + '\n```\n')
+          PY
