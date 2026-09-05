@@ -107,11 +107,17 @@ def list_run_ids(args):
 
 def upload_inputs(args, files):
     prefix = f"s3://{args.bucket}/jobs/{args.request_id}/input"
-    existing = run([
-        "aws", "s3", "ls", f"{prefix}/",
-        "--profile", args.profile, "--endpoint-url", args.endpoint,
+    existing_raw = run([
+        "aws", "s3api", "list-objects-v2",
+        "--bucket", args.bucket,
+        "--prefix", f"jobs/{args.request_id}/input/",
+        "--max-keys", "1",
+        "--profile", args.profile,
+        "--endpoint-url", args.endpoint,
+        "--output", "json",
     ], capture=True, timeout=30)
-    if existing:
+    existing = json.loads(existing_raw or "{}")
+    if existing.get("Contents"):
         raise CommandError(
             f"Request input already exists; use a new request-id: {args.request_id}"
         )
