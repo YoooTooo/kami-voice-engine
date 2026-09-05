@@ -18,6 +18,7 @@ MVPの責務は **音声ファイル入力 → 音声ファイル出力** だけ
 3. GitHub ActionsのLinux CPUによる単発変換
 4. GitHub ActionsのLinux CPUによる7ファイルのバッチ変換
 5. Macからの1コマンド操作による、アップロード・Actions起動・待機・ダウンロード
+6. R2の`jobs/`配下を90日後に自動削除するLifecycle rule
 
 GitHub Actionsの汎用バッチは手動起動です。定期実行やcontent-engineとの自動接続はまだ追加していません。
 
@@ -242,7 +243,7 @@ kami-voice-private/
                 └── packages.txt
 ```
 
-`amaterasu/`は永続保存対象です。`jobs/`は入力と変換結果の一時保管領域で、将来90日保持のLifecycle ruleを設定します。
+`amaterasu/`は永続保存対象です。`jobs/`は入力と変換結果の一時保管領域で、Prefix `jobs/`を対象に90日後に削除するLifecycle ruleを設定済みです。削除期限はモデルの`amaterasu/`には適用されません。
 
 ### Mac用AWS CLIプロファイル
 
@@ -365,7 +366,6 @@ nihongo-content-engine
 
 ## 次の作業
 
-- R2の`jobs/`だけを対象にした90日Lifecycle rule
 - content-engineからのworkflow起動・完了待機・結果取得
 - 依存関係とモデル取得のキャッシュ効果測定
 - 実際の7日分TTSによる音質・所要時間確認
