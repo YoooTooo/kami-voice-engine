@@ -1,4 +1,4 @@
-name: RVC CPU smoke test
+name: RVC CPU batch smoke test
 
 # Development compatibility test only; no production schedule.
 on:
@@ -103,7 +103,7 @@ jobs:
           applio/.venv/bin/python -m pip check
           applio/.venv/bin/python -m pip freeze > "$KAMI_TEST_DIR/result/packages.txt"
 
-      - name: Download test input and private models
+      - name: Download seven test inputs and private models
         timeout-minutes: 5
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -117,19 +117,24 @@ jobs:
             "$KAMI_TEST_DIR/models/amaterasu.pth" --endpoint-url "$R2_ENDPOINT" --only-show-errors
           /usr/bin/time -v aws s3 cp "s3://$R2_BUCKET/amaterasu/amaterasu.index" \
             "$KAMI_TEST_DIR/models/amaterasu.index" --endpoint-url "$R2_ENDPOINT" --only-show-errors
-          aws s3 cp "s3://$R2_BUCKET/tests/input/question.wav" \
-            "$KAMI_TEST_DIR/input/question.wav" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          aws s3 sync "s3://$R2_BUCKET/tests/batch-input/" \
+            "$KAMI_TEST_DIR/input/" --endpoint-url "$R2_ENDPOINT" --only-show-errors
 
-      - name: Validate short input
+      - name: Validate seven short inputs
         run: |
           python - <<'PY'
           import os
           from pathlib import Path
           from kami_voice import validate_wav
-          data = validate_wav(Path(os.environ['KAMI_TEST_DIR']) / 'input/question.wav')
-          if data['duration_seconds'] > 15:
-              raise SystemExit('Smoke test input must be 15 seconds or shorter.')
-          print('Input:', data)
+          folder = Path(os.environ['KAMI_TEST_DIR']) / 'input'
+          files = sorted(folder.glob('*.wav'))
+          if len(files) != 7:
+              raise SystemExit(f'Expected exactly 7 WAV inputs, found {len(files)}.')
+          for file in files:
+              data = validate_wav(file)
+              if data['duration_seconds'] > 15:
+                  raise SystemExit(f'{file.name} is longer than 15 seconds.')
+              print(file.name, data)
           PY
 
       - name: Download auxiliary inference models
@@ -151,12 +156,12 @@ jobs:
           assert device == 'cpu', f'Expected CPU, got {device}'
           PY
 
-      - name: Convert one clip
+      - name: Convert seven clips in one batch
         timeout-minutes: 10
         run: |
           /usr/bin/time -v -o "$KAMI_TEST_DIR/result/inference-time.txt" \
-            python kami_voice.py convert "$KAMI_TEST_DIR/input/question.wav" \
-            --output "$KAMI_TEST_DIR/result/answer-rvc.wav" \
+            python kami_voice.py batch "$KAMI_TEST_DIR/input" \
+            --output "$KAMI_TEST_DIR/result/audio" --expected-count 7 \
             --applio-dir "$GITHUB_WORKSPACE/applio" \
             --python "$GITHUB_WORKSPACE/applio/.venv/bin/python" \
             --model "$KAMI_TEST_DIR/models/amaterasu.pth" \
@@ -171,11 +176,18 @@ jobs:
         run: |
           result_prefix="tests/results/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           # Explicit allowlist: never upload the workspace or the model directory.
-          for name in answer-rvc.wav inference-time.txt packages.txt; do
-            aws s3 cp "$KAMI_TEST_DIR/result/$name" "s3://$R2_BUCKET/$result_prefix/$name" \
+          for number in 01 02 03 04 05 06 07; do
+            name="day-$number.wav"
+            aws s3 cp "$KAMI_TEST_DIR/result/audio/$name" "s3://$R2_BUCKET/$result_prefix/$name" \
               --endpoint-url "$R2_ENDPOINT" --only-show-errors
           done
-          echo "Private result: s3://$R2_BUCKET/$result_prefix/answer-rvc.wav" >> "$GITHUB_STEP_SUMMARY"
+          for name in batch-result.json inference-time.txt packages.txt; do
+            source="$KAMI_TEST_DIR/result/$name"
+            if [[ "$name" == batch-result.json ]]; then source="$KAMI_TEST_DIR/result/audio/$name"; fi
+            aws s3 cp "$source" "s3://$R2_BUCKET/$result_prefix/$name" \
+              --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          done
+          echo "Private batch: s3://$R2_BUCKET/$result_prefix/" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Measurement summary (also on failure)
         if: ${{ always() }}
