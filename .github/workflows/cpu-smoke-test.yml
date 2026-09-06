@@ -1,6 +1,39 @@
 name: RVC CPU batch conversion
 
 on:
+  workflow_call:
+    inputs:
+      request_id:
+        description: 'Request ID: letters, numbers, dot, underscore, hyphen'
+        required: true
+        type: string
+      expected_count:
+        description: 'Expected number of audio files; 0 accepts any positive count'
+        required: false
+        default: '0'
+        type: string
+      pitch:
+        description: 'RVC pitch from -24 to 24'
+        required: false
+        default: '2'
+        type: string
+      engine_ref:
+        description: 'kami-voice-engine Git ref containing kami_voice.py'
+        required: false
+        default: 'main'
+        type: string
+    secrets:
+      R2_ACCESS_KEY_ID:
+        required: true
+      R2_SECRET_ACCESS_KEY:
+        required: true
+      R2_ENDPOINT:
+        required: true
+    outputs:
+      result_prefix:
+        description: 'Private R2 prefix containing the converted result'
+        value: ${{ jobs.convert.outputs.result_prefix }}
+
   workflow_dispatch:
     inputs:
       request_id:
@@ -17,6 +50,11 @@ on:
         required: true
         default: '2'
         type: string
+      engine_ref:
+        description: 'kami-voice-engine Git ref containing kami_voice.py'
+        required: true
+        default: 'main'
+        type: string
 
 permissions:
   contents: read
@@ -27,6 +65,8 @@ concurrency:
 
 jobs:
   convert:
+    outputs:
+      result_prefix: ${{ steps.save-result.outputs.result_prefix }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
@@ -58,6 +98,8 @@ jobs:
       - name: Checkout Kami
         uses: actions/checkout@v7
         with:
+          repository: YoooTooo/kami-voice-engine
+          ref: ${{ inputs.engine_ref }}
           persist-credentials: false
 
       - name: Checkout the tested Applio revision
@@ -209,6 +251,7 @@ jobs:
             --pitch "$RVC_PITCH" --timeout-seconds 1080
 
       - name: Save result to private R2 only
+        id: save-result
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -224,6 +267,7 @@ jobs:
           aws s3 cp "$KAMI_TEST_DIR/result/packages.txt" \
             "s3://$R2_BUCKET/$result_prefix/packages.txt" \
             --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          echo "result_prefix=$result_prefix" >> "$GITHUB_OUTPUT"
           echo "Private batch: s3://$R2_BUCKET/$result_prefix/" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Measurement summary (also on failure)
