@@ -91,7 +91,7 @@ def run_applio(args, mode, paths):
         env["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
     options = ["--pth-path", str(args.model), "--index-path", str(args.index),
                "--pitch", str(args.pitch), "--index-rate", str(args.index_rate),
-               "--volume-envelope", "1", "--protect", "0.5", "--f0-method", "rmvpe",
+               "--volume-envelope", "1", "--protect", "0.20", "--f0-method", "rmvpe",
                "--embedder-model", "contentvec", "--sid", "0", "--export-format", "WAV"]
     command = [str(args.python), "-X", "faulthandler", "core.py", mode, *paths, *options]
     return subprocess.run(command, cwd=args.applio_dir, env=env,
@@ -123,7 +123,7 @@ def batch(args, inputs):
         "applio_reference_commit": APPLIO_REFERENCE_COMMIT,
         "applio_exit_code": None, "applio_error": None,
         "settings": {"pitch": args.pitch, "index_rate": args.index_rate, "volume_envelope": 1,
-                     "protect": 0.5, "f0_method": "rmvpe", "embedder_model": "contentvec",
+                     "protect": 0.20, "f0_method": "rmvpe", "embedder_model": "contentvec",
                      "sid": 0, "formant_shifting": False},
         "model": str(args.model), "index": str(args.index),
         "files": [{"input": str(file), "output": str(args.output / f"{file.stem}.wav"),
