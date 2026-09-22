@@ -17,6 +17,11 @@ on:
         required: false
         default: '2'
         type: string
+      index_rate:
+        description: 'RVC index rate from 0.0 to 1.0'
+        required: false
+        default: '0.05'
+        type: string
       engine_ref:
         description: 'kami-voice-engine Git ref containing kami_voice.py'
         required: false
@@ -49,6 +54,11 @@ on:
         description: 'RVC pitch from -24 to 24'
         required: true
         default: '2'
+        type: string
+      index_rate:
+        description: 'RVC index rate from 0.0 to 1.0'
+        required: true
+        default: '0.05'
         type: string
       engine_ref:
         description: 'kami-voice-engine Git ref containing kami_voice.py'
@@ -88,6 +98,7 @@ jobs:
       REQUEST_ID: ${{ inputs.request_id }}
       EXPECTED_COUNT: ${{ inputs.expected_count }}
       RVC_PITCH: ${{ inputs.pitch }}
+      RVC_INDEX_RATE: ${{ inputs.index_rate }}
 
     steps:
       - name: Start measurement
@@ -128,6 +139,7 @@ jobs:
           request_id = os.environ['REQUEST_ID']
           expected_count = os.environ['EXPECTED_COUNT']
           pitch = os.environ['RVC_PITCH']
+          index_rate = os.environ['RVC_INDEX_RATE']
           if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,79}', request_id):
               raise SystemExit('Invalid request_id.')
           if not expected_count.isdigit() or not 0 <= int(expected_count) <= 100:
@@ -138,6 +150,12 @@ jobs:
               raise SystemExit('pitch must be an integer.')
           if not -24 <= pitch_number <= 24:
               raise SystemExit('pitch must be from -24 to 24.')
+          try:
+              index_rate_number = float(index_rate)
+          except ValueError:
+              raise SystemExit('index_rate must be a number.')
+          if not 0.0 <= index_rate_number <= 1.0:
+              raise SystemExit('index_rate must be from 0.0 to 1.0.')
           # Stop on source mismatch instead of silently testing another CLI.
           expected = {
               'core.py': 'cbdfcefe9987b076467ea063cd89c88bd08f0dcef105ebf4edbcd62c7e441940',
@@ -248,7 +266,9 @@ jobs:
             --python "$GITHUB_WORKSPACE/applio/.venv/bin/python" \
             --model "$KAMI_TEST_DIR/models/amaterasu.pth" \
             --index "$KAMI_TEST_DIR/models/amaterasu.index" \
-            --pitch "$RVC_PITCH" --timeout-seconds 1080
+            --pitch "$RVC_PITCH" \
+            --index-rate "$RVC_INDEX_RATE" \
+            --timeout-seconds 1080
 
       - name: Save result to private R2 only
         id: save-result

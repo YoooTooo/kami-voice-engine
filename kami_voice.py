@@ -90,7 +90,7 @@ def run_applio(args, mode, paths):
         env["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
         env["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
     options = ["--pth-path", str(args.model), "--index-path", str(args.index),
-               "--pitch", str(args.pitch), "--index-rate", "0.84",
+               "--pitch", str(args.pitch), "--index-rate", str(args.index_rate),
                "--volume-envelope", "1", "--protect", "0.5", "--f0-method", "rmvpe",
                "--embedder-model", "contentvec", "--sid", "0", "--export-format", "WAV"]
     command = [str(args.python), "-X", "faulthandler", "core.py", mode, *paths, *options]
@@ -122,7 +122,7 @@ def batch(args, inputs):
         "started_at": datetime.now(timezone.utc).isoformat(),
         "applio_reference_commit": APPLIO_REFERENCE_COMMIT,
         "applio_exit_code": None, "applio_error": None,
-        "settings": {"pitch": args.pitch, "index_rate": 0.84, "volume_envelope": 1,
+        "settings": {"pitch": args.pitch, "index_rate": args.index_rate, "volume_envelope": 1,
                      "protect": 0.5, "f0_method": "rmvpe", "embedder_model": "contentvec",
                      "sid": 0, "formant_shifting": False},
         "model": str(args.model), "index": str(args.index),
@@ -208,6 +208,7 @@ def main():
         command.add_argument("--model", type=absolute)
         command.add_argument("--index", type=absolute)
         command.add_argument("--pitch", type=int, choices=range(-24, 25), default=2)
+        command.add_argument("--index-rate", type=float, choices=None, default=0.05)
         command.add_argument("--timeout-seconds", type=positive_int, default=1800,
                              help="Maximum Applio process runtime (default 1800)")
         if mode == "convert":
